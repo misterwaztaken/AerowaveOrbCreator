@@ -24,7 +24,7 @@ jobs:
 
       - name: Build executable with PyInstaller
         run: |
-          pyinstaller --noconsole --onefile --name "AerowaveOrbCreator" --add-data "assets;assets" AerowaveOrbCreator.py
+          pyinstaller --noconsole --onefile --name "AerowaveOrbCreator" --add-data "assets;assets" main.py
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v2
