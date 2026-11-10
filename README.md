@@ -21,7 +21,7 @@ An cool Frutiger Aero styled desktop application designed for creating, customiz
 
 ---
 
-## Getting the One-Click Executable
+## Running the Pyinstaller (Windows)
 
 If you just want to run the app without installing Python:
 1. Head over to the [Releases](../../releases) tab on the right.

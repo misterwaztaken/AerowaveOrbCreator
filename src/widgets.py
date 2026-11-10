@@ -1,3 +1,11 @@
+"""
+widgets.py
+
+contains widget creation and management functions for the interface
+
+(from Aerowave Orb Creator)
+"""
+
 from .common import *
 
 # ======================================================================================

@@ -1,20 +1,13 @@
 """
-Aerowave Orb Creator
-====================
-Keep these files next to this script (or inside an "assets" folder beside it):
+common.py
 
-    aerowave.png, orbcreator.png, Orangeorb.png      - the three logo components
-    orbcreatorjingle.wav                              - intro jingle
-    saved.wav                                         - "orb saved" sound
-    darkbutton.png, ecobutton.png, aquabutton.png,
-    dorficbutton.png                                  - UI selector orbs
-    exittext.png, exitjingle.wav                      - exit animation
+this script is responsible for handling all library imports,
+app constants, theme dictionaries, the config save/load logic,
+asset lookup, and the Sound class for "fire-and-forget" WAV playback 
 
-The chosen UI theme, the last folder you saved to and your 10 most recent colours are
-remembered in config.aero
-(created next to this script).
-Requires: Pillow, numpy   ->   pip install pillow numpy
+(from Aerowave Orb Creator)
 """
+
 import os
 import sys
 import json

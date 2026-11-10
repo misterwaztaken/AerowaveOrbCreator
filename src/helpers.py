@@ -1,3 +1,10 @@
+"""
+helpers.py
+
+contains small helper functions used throughout AOC
+(from Aerowave Orb Creator)
+"""
+
 from .common import *
 
 # ======================================================================================

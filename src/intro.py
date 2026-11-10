@@ -1,3 +1,12 @@
+"""
+intro.py
+
+contains the AeroIntro class for handling the introduction sequence
+AND the AeroOutro class for handling the outro
+
+(from Aerowave Orb Creator)
+"""
+
 from .common import *
 from .helpers import *
 from .aurora import *

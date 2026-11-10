@@ -1,3 +1,13 @@
+"""
+editor.py
+
+contains the OrbCreator class, builds and themes the editor
+window, handles canvas interaction, layers panel, ui selector
+dropdown, etc.
+
+(from Aerowave Orb Creator)
+"""
+
 from .common import *
 from .helpers import *
 from .widgets import *
