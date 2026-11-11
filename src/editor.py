@@ -22,6 +22,8 @@ class OrbCreator:
         self.root.title(APP_NAME)
         
         self.canvas_size = 500
+        self.view_px = self.canvas_size          # pixel size of the canvas widget on screen
+        self.view_scale = 1.0                    # screen pixels per design unit
         self.orb_radius = 150
         self.layers = []
         self.selected_layer = None
@@ -51,8 +53,10 @@ class OrbCreator:
         self.scales = []
         self.managed_buttons = []
         self.managed_button_labels = []
-        self.left_widgets = []
-        self.right_widgets = []
+        self.toolbar_widgets = []
+        self.sidebar_widgets = []
+        self.action_widgets = []
+        self._layout_job = None                    # pending coalesced layout refresh
 
         # Overlays (UI selector drop-down / pop-up dialog)
         self.dd = None
@@ -80,147 +84,261 @@ class OrbCreator:
     def setup_ui(self):
         main_frame = tk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Left Panel (Gradient Canvas)
-        self.left_panel = GradientPanel(main_frame)
-        self.left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 10), pady=10)
-        self.left_panel.bind("<Configure>", lambda e: self.root.after(10, self.sync_widget_colors), add="+")
-        
-        top_bar = tk.Frame(self.left_panel, bd=0)
-        top_bar.pack(fill=tk.X, pady=(0, 10))
-        self.left_widgets.append(top_bar)
-        
-        self.ui_btn = self.create_themed_button(top_bar, "UI Selector", self.toggle_ui_selector, 120)
-        self.ui_btn.pack(side=tk.LEFT, padx=5)
-        self.create_themed_button(top_bar, "Exit", self.exit_app, 80).pack(side=tk.RIGHT, padx=5)
 
-        brand = tk.Frame(top_bar, bd=0)
-        brand.place(relx=0.5, rely=0.5, anchor="center")
+        # full window backdrop: gradient plus decorations, every region floats on it
+        self.backdrop = GradientPanel(main_frame)
+        self.backdrop.pack(fill=tk.BOTH, expand=True)
+        self.backdrop.bind("<Configure>", lambda e: self.root.after(10, self._layout_changed), add="+")
+
+        # toolbar card: brand on the left, ui selector + exit on the right
+        self.toolbar_card = GlassCard(self.backdrop)
+        self.toolbar_card.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(10, 8))
+        self.toolbar_card.on_flat_bg = lambda bg: self._apply_card_bg(self.toolbar_card, self.toolbar_widgets)
+
+        tb_inner = tk.Frame(self.toolbar_card, bd=0)
+        tb_inner.pack(fill=tk.X, padx=24, pady=16)
+        self.toolbar_widgets.append(tb_inner)
+
+        brand = tk.Frame(tb_inner, bd=0)
+        brand.pack(side=tk.LEFT)
+        self.toolbar_widgets.append(brand)
+
+        icon = self._brand_art("image/orangeorb.png", 30)
+        if icon:
+            lbl_icon = tk.Label(brand, image=icon, bd=0)
+            lbl_icon.pack(side=tk.LEFT, padx=(0, 10))
+            self.toolbar_widgets.append(lbl_icon)
         lbl_b1 = tk.Label(brand, text="Aerowave", font=('Segoe UI', 15))
         lbl_b1.pack(side=tk.LEFT)
         lbl_b2 = tk.Label(brand, text=" Orb Creator", font=('Segoe UI', 15, 'bold italic'))
         lbl_b2.pack(side=tk.LEFT)
         self.labels.extend([lbl_b1, lbl_b2])
 
-        # In compact mode the canvas and the controls sit side by side
-        if self.compact:
-            workspace = tk.Frame(self.left_panel, bd=0)
-            workspace.pack(fill=tk.X)
-            self.left_widgets.append(workspace)
-            side = tk.Frame(self.left_panel, bd=0)
-            self.left_widgets.append(side)
-            canvas_host, ctl_host = workspace, side
-        else:
-            workspace = side = None
-            canvas_host, ctl_host = self.left_panel, self.left_panel
+        tb_right = tk.Frame(tb_inner, bd=0)
+        tb_right.pack(side=tk.RIGHT)
+        self.toolbar_widgets.append(tb_right)
+        self.ui_btn = self.create_themed_button(tb_right, "UI Selector", self.toggle_ui_selector, 120)
+        self.ui_btn.pack(side=tk.LEFT, padx=(0, 8))
+        self.create_themed_button(tb_right, "Exit", self.exit_app, 80).pack(side=tk.LEFT)
 
-        # Orb Drawing Canvas
-        self.canvas_frame = tk.Frame(self.left_panel, bg='#1a1a1a', bd=0)
+        # action bar card: layer actions on the left, export + save on the right
+        self.action_card = GlassCard(self.backdrop)
+        self.action_card.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(8, 10))
+        self.action_card.on_flat_bg = lambda bg: self._apply_card_bg(self.action_card, self.action_widgets)
+
+        ab_inner = tk.Frame(self.action_card, bd=0)
+        ab_inner.pack(fill=tk.X, padx=24, pady=16)
+        self.action_widgets.append(ab_inner)
+
+        ab_left = tk.Frame(ab_inner, bd=0)
+        ab_left.pack(side=tk.LEFT)
+        self.action_widgets.append(ab_left)
+        self.create_themed_button(ab_left, "Orb", self.create_orb, 80).pack(side=tk.LEFT, padx=(0, 8))
+        self.create_themed_button(ab_left, "Reflection", self.create_reflection, 100).pack(side=tk.LEFT, padx=(0, 8))
+        self.create_themed_button(ab_left, "Glow", self.create_glow, 80).pack(side=tk.LEFT)
+
+        ab_right = tk.Frame(ab_inner, bd=0)
+        ab_right.pack(side=tk.RIGHT)
+        self.action_widgets.append(ab_right)
+        lbl_exp = tk.Label(ab_right, text="Export Res:")
+        lbl_exp.pack(side=tk.LEFT, padx=(0, 6))
+        self.labels.append(lbl_exp)
+        self.resolution_var = tk.StringVar(value="1080")
+        self.res_entry = tk.Entry(ab_right, textvariable=self.resolution_var, width=8)
+        self.res_entry.pack(side=tk.LEFT, padx=(0, 8), ipady=3)
+        self.create_themed_button(ab_right, "Save Orb", self.save_orb, 100).pack(side=tk.LEFT)
+
+        # sidebar card: layer list plus contextual properties
+        self.sidebar_card = GlassCard(self.backdrop)
+        self.sidebar_card.pack_propagate(False)
         if self.compact:
-            self.canvas_frame.pack(in_=workspace, side=tk.LEFT, expand=True, padx=(0, 15), pady=5, anchor="ne")
-            side.pack(in_=workspace, side=tk.LEFT, expand=True, padx=(15, 0), anchor="nw")
+            # short screens: the sidebar turns into a strip above the action bar
+            self.sidebar_card.configure(height=250)
+            self.sidebar_card.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=8)
         else:
-            self.canvas_frame.pack(pady=5)
-        self.left_widgets.append(self.canvas_frame)
-        
-        self.canvas = tk.Canvas(self.canvas_frame, width=self.canvas_size, height=self.canvas_size, 
+            self.sidebar_card.configure(width=310)
+            self.sidebar_card.pack(side=tk.RIGHT, fill=tk.Y, padx=(8, 10), pady=(0, 8))
+        self.sidebar_card.on_flat_bg = lambda bg: self._apply_card_bg(self.sidebar_card, self.sidebar_widgets)
+
+        sb_inner = tk.Frame(self.sidebar_card, bd=0)
+        sb_inner.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
+        self.sidebar_widgets.append(sb_inner)
+
+        # tall screens stack layers above properties, compact puts them side by side
+        if self.compact:
+            layers_col = tk.Frame(sb_inner, bd=0)
+            layers_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            props_col = tk.Frame(sb_inner, bd=0)
+            props_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(16, 0))
+        else:
+            layers_col = tk.Frame(sb_inner, bd=0)
+            layers_col.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            props_col = tk.Frame(sb_inner, bd=0)
+            props_col.pack(side=tk.TOP, fill=tk.X, pady=(12, 0))
+        self.sidebar_widgets.extend([layers_col, props_col])
+
+        lbl_layers = tk.Label(layers_col, text="LAYERS", font=('Arial', 12, 'bold'), anchor='w')
+        lbl_layers.pack(fill=tk.X)
+        self.labels.append(lbl_layers)
+
+        self.layers_frame = tk.Frame(layers_col, bd=0)
+        self.layers_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        self.sidebar_widgets.append(self.layers_frame)
+
+        lbl_props = tk.Label(props_col, text="PROPERTIES", font=('Arial', 12, 'bold'), anchor='w')
+        lbl_props.pack(fill=tk.X)
+        self.labels.append(lbl_props)
+
+        # contextual blocks, the one matching the selected layer type is shown
+        self.prop_note = tk.Label(props_col, text="Select a layer to edit it", font=('Segoe UI', 9), anchor='w')
+        self.labels.append(self.prop_note)
+
+        self.props_orb = tk.Frame(props_col, bd=0)
+        self.sidebar_widgets.append(self.props_orb)
+        self.create_themed_button(self.props_orb, "Orb Color", self.choose_color, 160).pack(fill=tk.X)
+
+        self.props_refl = tk.Frame(props_col, bd=0)
+        self.sidebar_widgets.append(self.props_refl)
+
+        lbl_g_scale = tk.Label(self.props_refl, text="Grad Y Scale:", anchor='w')
+        lbl_g_scale.pack(fill=tk.X, padx=2)
+        self.labels.append(lbl_g_scale)
+
+        self.var_grad_y_scale = tk.DoubleVar(value=1.0)
+        scale_g_y = tk.Scale(self.props_refl, variable=self.var_grad_y_scale, from_=0.1, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, command=self.on_prop_change, bd=0, length=240)
+        scale_g_y.pack(fill=tk.X, padx=4)
+        self.scales.append(scale_g_y)
+
+        lbl_g_pos = tk.Label(self.props_refl, text="Grad Y Offset:", anchor='w')
+        lbl_g_pos.pack(fill=tk.X, padx=2)
+        self.labels.append(lbl_g_pos)
+
+        self.var_grad_y_pos = tk.DoubleVar(value=0)
+        scale_g_pos = tk.Scale(self.props_refl, variable=self.var_grad_y_pos, from_=-200, to=200, resolution=1, orient=tk.HORIZONTAL, command=self.on_prop_change, bd=0, length=240)
+        scale_g_pos.pack(fill=tk.X, padx=4)
+        self.scales.append(scale_g_pos)
+
+        self.create_themed_button(self.props_refl, "Custom Gradient Color", self.choose_custom_grad, 160).pack(fill=tk.X, pady=(8, 0))
+        self.create_themed_button(self.props_refl, "Default Gradient Color", self.default_grad, 160).pack(fill=tk.X, pady=(6, 0))
+
+        self.props_glow = tk.Frame(props_col, bd=0)
+        self.sidebar_widgets.append(self.props_glow)
+
+        lbl_glow_bright = tk.Label(self.props_glow, text="Glow Brightness:", anchor='w')
+        lbl_glow_bright.pack(fill=tk.X, padx=2)
+        self.labels.append(lbl_glow_bright)
+
+        self.var_glow_opacity = tk.DoubleVar(value=220)
+        scale_glow = tk.Scale(self.props_glow, variable=self.var_glow_opacity, from_=0, to=255, resolution=1, orient=tk.HORIZONTAL, command=self.on_prop_change, bd=0, length=240)
+        scale_glow.pack(fill=tk.X, padx=4)
+        self.scales.append(scale_glow)
+
+        # canvas workspace: shrinkwrapped around the canvas, centered on the backdrop
+        self.canvas_frame = tk.Frame(self.backdrop, bg='#1a1a1a', bd=0)
+        self.canvas_frame.pack(expand=True, anchor="c", padx=8, pady=8)
+
+        self.canvas = tk.Canvas(self.canvas_frame, width=self.view_px, height=self.view_px,
                                 bg='#1a1a1a', highlightthickness=0)
         self.canvas.pack(padx=2, pady=2)
         self.draw_checkerboard()
-        
-        self.snap_line_h = self.canvas.create_line(0, self.canvas_size//2, self.canvas_size, 
-                                                   self.canvas_size//2, fill='red', width=1, state='hidden')
-        self.snap_line_v = self.canvas.create_line(self.canvas_size//2, 0, self.canvas_size//2, 
-                                                   self.canvas_size, fill='red', width=1, state='hidden')
-        
-        # Controls Frame
-        controls_frame = tk.Frame(self.left_panel, bd=0)
-        controls_frame.pack(in_=ctl_host, fill=tk.X, pady=5)
-        self.left_widgets.append(controls_frame)
-        controls_row = tk.Frame(controls_frame, bd=0)
-        controls_row.pack()
-        
-        self.create_themed_button(controls_row, "Orb", self.create_orb, 80).pack(side=tk.LEFT, padx=5)
-        self.create_themed_button(controls_row, "Orb Color", self.choose_color, 100).pack(side=tk.LEFT, padx=5)
-        self.create_themed_button(controls_row, "Reflection", self.create_reflection, 100).pack(side=tk.LEFT, padx=5)
-        self.create_themed_button(controls_row, "Glow", self.create_glow, 80).pack(side=tk.LEFT, padx=5)
-        
-        # Layer Properties Panel
-        prop_outer = tk.Frame(self.left_panel, bd=0)
-        prop_outer.pack(in_=ctl_host, fill=tk.X, pady=10, ipadx=5, ipady=5)
-        self.left_widgets.append(prop_outer)
-        prop_frame = tk.Frame(prop_outer, bd=0)
-        prop_frame.pack()
-        slider_len = 190 if self.compact else 250
-        
-        lbl_g_scale = tk.Label(prop_frame, text="Grad Y Scale:")
-        lbl_g_scale.grid(row=0, column=0, sticky='e', padx=5, pady=2)
-        self.labels.append(lbl_g_scale)
-        
-        self.var_grad_y_scale = tk.DoubleVar(value=1.0)
-        scale_g_y = tk.Scale(prop_frame, variable=self.var_grad_y_scale, from_=0.1, to=5.0, resolution=0.1, orient=tk.HORIZONTAL, command=self.on_prop_change, bd=0, length=slider_len)
-        scale_g_y.grid(row=0, column=1, sticky='ew', padx=5)
-        self.scales.append(scale_g_y)
-        
-        lbl_g_pos = tk.Label(prop_frame, text="Grad Y Offset:")
-        lbl_g_pos.grid(row=0, column=2, sticky='e', padx=5, pady=2)
-        self.labels.append(lbl_g_pos)
-        
-        self.var_grad_y_pos = tk.DoubleVar(value=0)
-        scale_g_pos = tk.Scale(prop_frame, variable=self.var_grad_y_pos, from_=-200, to=200, resolution=1, orient=tk.HORIZONTAL, command=self.on_prop_change, bd=0, length=slider_len)
-        scale_g_pos.grid(row=0, column=3, sticky='ew', padx=5)
-        self.scales.append(scale_g_pos)
-        
-        self.create_themed_button(prop_frame, "Custom Gradient Color", self.choose_custom_grad, 160).grid(row=1, column=0, columnspan=2, pady=5)
-        self.create_themed_button(prop_frame, "Default Gradient Color", self.default_grad, 160).grid(row=1, column=2, columnspan=2, pady=5)
-        
-        lbl_glow_bright = tk.Label(prop_frame, text="Glow Brightness:")
-        lbl_glow_bright.grid(row=2, column=0, sticky='e', padx=5, pady=5)
-        self.labels.append(lbl_glow_bright)
-        
-        self.var_glow_opacity = tk.DoubleVar(value=220)
-        scale_glow = tk.Scale(prop_frame, variable=self.var_glow_opacity, from_=0, to=255, resolution=1, orient=tk.HORIZONTAL, command=self.on_prop_change, bd=0, length=slider_len)
-        scale_glow.grid(row=2, column=1, columnspan=3, sticky='ew', padx=5)
-        self.scales.append(scale_glow)
-        
-        prop_frame.grid_columnconfigure(1, weight=1)
-        prop_frame.grid_columnconfigure(3, weight=1)
 
-        # Export Frame
-        export_frame = tk.Frame(self.left_panel, bd=0)
-        export_frame.pack(in_=ctl_host, fill=tk.X, pady=10)
-        self.left_widgets.append(export_frame)
-        export_row = tk.Frame(export_frame, bd=0)
-        export_row.pack()
-        
-        lbl_exp = tk.Label(export_row, text="Export Res:")
-        lbl_exp.pack(side=tk.LEFT, padx=5)
-        self.labels.append(lbl_exp)
-        
-        self.resolution_var = tk.StringVar(value="1080")
-        self.res_entry = tk.Entry(export_row, textvariable=self.resolution_var, width=8)
-        self.res_entry.pack(side=tk.LEFT, padx=5, ipady=3)
-        self.create_themed_button(export_row, "Save Orb", self.save_orb, 100).pack(side=tk.LEFT, padx=15)
-        
-        # Right Panel (Gradient Canvas)
-        self.right_panel = GradientPanel(main_frame, width=250)
-        self.right_panel.pack(side=tk.RIGHT, fill=tk.Y, pady=10, padx=(0, 10))
-        self.right_panel.pack_propagate(False)
-        self.right_panel.bind("<Configure>", lambda e: self.root.after(10, self.sync_widget_colors), add="+")
-        
-        lbl_layers = tk.Label(self.right_panel, text="LAYERS", font=('Arial', 12, 'bold'))
-        lbl_layers.pack(pady=10)
-        self.labels.append(lbl_layers)
-        self.right_widgets.append(lbl_layers)
-        
-        self.layers_frame = tk.Frame(self.right_panel, bd=0)
-        self.layers_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.right_widgets.append(self.layers_frame)
-        
+        c = self.view_px // 2
+        self.snap_line_h = self.canvas.create_line(0, c, self.view_px, c, fill='red', width=1, state='hidden')
+        self.snap_line_v = self.canvas.create_line(c, 0, c, self.view_px, fill='red', width=1, state='hidden')
+
+        for card in (self.toolbar_card, self.sidebar_card, self.action_card):
+            card.bind("<Configure>", lambda e: self.root.after(10, self._layout_changed), add="+")
+
         self.canvas.bind('<Button-1>', self.on_canvas_click)
         self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_canvas_release)
-        
+
+        self._show_layer_props(None)
+
+    def _brand_art(self, name, height):
+        # small brand artwork for the toolbar, trimmed to its alpha
+        p = asset_path(name)
+        if not p:
+            return None
+        try:
+            im = Image.open(p).convert("RGBA")
+            bb = im.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox()
+            if bb:
+                im = im.crop(bb)
+            im = im.resize((max(1, int(im.width * height / im.height)), height), Image.LANCZOS)
+            art = ImageTk.PhotoImage(im)
+            self._keep.append(art)
+            return art
+        except Exception:
+            return None
+
+    def _show_layer_props(self, layer):
+        # swap the contextual property block to match the selected layer type
+        for w in (self.prop_note, self.props_orb, self.props_refl, self.props_glow):
+            w.pack_forget()
+        kind = layer.type if layer is not None else None
+        if kind == 'orb':
+            self.props_orb.pack(fill=tk.X, pady=(8, 0))
+        elif kind == 'reflection':
+            self.props_refl.pack(fill=tk.X, pady=(8, 0))
+        elif kind == 'glow':
+            self.props_glow.pack(fill=tk.X, pady=(8, 0))
+        else:
+            self.prop_note.pack(fill=tk.X, pady=(8, 0))
+        self._apply_card_bg(self.sidebar_card, self.sidebar_widgets)
+
+    def _layout_changed(self):
+        # bursts of configure events collapse into one refresh pass
+        if self._layout_job is not None:
+            return
+
+        def run():
+            self._layout_job = None
+            try:
+                for card in (self.toolbar_card, self.sidebar_card, self.action_card):
+                    card.refresh()
+                self._fit_canvas()
+            except tk.TclError:
+                pass
+
+        self._layout_job = self.root.after(10, run)
+
+    def _fit_canvas(self):
+        # fit the square canvas into the free space between the cards
+        try:
+            bw, bh = self.backdrop.winfo_width(), self.backdrop.winfo_height()
+            if bw < 80 or bh < 80:
+                return
+            if self.toolbar_card.winfo_height() < 10 or self.action_card.winfo_height() < 10:
+                return
+            if self.compact:
+                spare_w = 56
+                spare_h = (self.toolbar_card.winfo_height() + self.action_card.winfo_height()
+                           + self.sidebar_card.winfo_height() + 56)
+            else:
+                spare_w = self.sidebar_card.winfo_width() + 48
+                spare_h = self.toolbar_card.winfo_height() + self.action_card.winfo_height() + 56
+            side = int(min(bw - spare_w, bh - spare_h))
+            side = max(220, side)
+            if abs(side - self.view_px) >= 2:
+                self._set_canvas_size(side)
+        except tk.TclError:
+            pass
+
+    def _set_canvas_size(self, side):
+        # the canvas keeps its 500 unit design space, only the pixel view changes
+        self.view_px = side
+        self.view_scale = side / float(self.canvas_size)
+        self.canvas.config(width=side, height=side)
+        self.draw_checkerboard()
+        self._place_snap_lines()
+        self.render_canvas()
+
+    def _place_snap_lines(self):
+        c = self.view_px // 2
+        self.canvas.coords(self.snap_line_h, 0, c, self.view_px, c)
+        self.canvas.coords(self.snap_line_v, c, 0, c, self.view_px)
+
     def create_themed_button(self, parent, text, command, width=120, height=30):
         lbl = tk.Label(parent, text=text, cursor="hand2", font=('Arial', 9, 'bold'), compound="center", bd=0, highlightthickness=0)
         
@@ -261,41 +379,44 @@ class OrbCreator:
         for child in widget.winfo_children():
             self.apply_bg_to_tree(child, bg_col, t)
 
-    def sync_widget_colors(self):
-        t = THEMES[self.current_theme]
-        
-        h_left = self.left_panel.winfo_height()
-        if h_left > 10:
-            for widget in self.left_widgets:
-                if not widget.winfo_exists(): continue
-                wy = widget.winfo_y() + widget.winfo_height() / 2
-                ratio = min(1.0, max(0.0, wy / h_left))
-                bg_col = self.get_gradient_color(t["ui_top"], t["ui_bot"], ratio)
-                self.apply_bg_to_tree(widget, bg_col, t)
-                
-        try:                                                    # decorations live only in the empty area below the widgets
-            bottoms = [w.winfo_y() + w.winfo_height() for w in self.left_widgets if w.winfo_exists() and w.winfo_ismapped()]
-            if bottoms:
-                self.left_panel.set_decor_top(max(bottoms))
+    def _apply_card_bg(self, card, widgets):
+        # paint each hosted widget with the glass colour at its own height
+        if not card.row_colors:
+            return
+        try:
+            self.root.update_idletasks()             # fresh widget positions after repacks
+            cy, ch = card.winfo_rooty(), card.winfo_height()
+            if ch < 20:
+                return
+            for w in widgets:
+                if w.winfo_exists():
+                    wy = w.winfo_rooty() + w.winfo_height() / 2.0
+                    self.apply_bg_to_tree(w, card.color_at((wy - cy) / float(ch)), None)
         except tk.TclError:
             pass
 
-        h_right = self.right_panel.winfo_height()
-        if h_right > 10:
-            for widget in self.right_widgets:
-                if not widget.winfo_exists(): continue
-                wy = widget.winfo_y() + widget.winfo_height() / 2
-                ratio = min(1.0, max(0.0, wy / h_right))
-                bg_col = self.get_gradient_color(t["layer_top"], t["layer_bot"], ratio)
-                self.apply_bg_to_tree(widget, bg_col, t)
+    def sync_widget_colors(self):
+        for card, widgets in ((self.toolbar_card, self.toolbar_widgets),
+                               (self.sidebar_card, self.sidebar_widgets),
+                               (self.action_card, self.action_widgets)):
+            self._apply_card_bg(card, widgets)
+
+        try:                                                    # decorations flow over the backdrop below the toolbar
+            tb = self.toolbar_card
+            if tb.winfo_ismapped():
+                self.backdrop.set_decor_top(tb.winfo_y() + tb.winfo_height() + 16)
+        except tk.TclError:
+            pass
 
     def apply_theme(self, theme_name):
         t = THEMES[theme_name]
         self.current_theme = theme_name
         self.root.configure(bg=t["ui_top"]) # Window background fallback
         
-        self.left_panel.set_colors(t["ui_top"], t["ui_bot"], t.get("decor"))
-        self.right_panel.set_colors(t["layer_top"], t["layer_bot"])
+        st = GLASS[theme_name]
+        self.backdrop.set_colors(t["ui_top"], t["ui_bot"], t.get("decor"))
+        for card in (self.toolbar_card, self.sidebar_card, self.action_card):
+            card.set_theme(t, st)
         
         for l in self.labels:
             l.configure(fg=t["fg"])
@@ -323,6 +444,7 @@ class OrbCreator:
         self.style_entry(self.res_entry)
         self.update_layers_panel()
         self.root.after(20, self.sync_widget_colors)
+        self.root.after(60, self._fit_canvas)
 
     def style_entry(self, e, font=('Segoe UI', 10)):
         g = GLASS[self.current_theme]
@@ -332,11 +454,13 @@ class OrbCreator:
                     selectbackground=g["list_sel"], selectforeground=g["list_sel_fg"], font=font)
 
     def draw_checkerboard(self):
+        # pixel space checkerboard behind the composition
+        self.canvas.delete('board')
         square_size = 20
-        for i in range(0, self.canvas_size, square_size):
-            for j in range(0, self.canvas_size, square_size):
+        for i in range(0, self.view_px, square_size):
+            for j in range(0, self.view_px, square_size):
                 color = '#1a1a1a' if (i // square_size + j // square_size) % 2 == 0 else '#252525'
-                self.canvas.create_rectangle(i, j, i + square_size, j + square_size, fill=color, outline='')
+                self.canvas.create_rectangle(i, j, i + square_size, j + square_size, fill=color, outline='', tags='board')
 
     def on_prop_change(self, *args):
         refl = next((l for l in self.layers if l.type == 'reflection'), None)
@@ -373,6 +497,7 @@ class OrbCreator:
         self.layers = [l for l in self.layers if l.type != 'orb']
         orb = OrbLayer("Orb", "orb")
         self.layers.insert(0, orb)
+        self.select_layer(orb)
         self.update_layers_panel()
         self.render_canvas()
 
@@ -412,15 +537,12 @@ class OrbCreator:
         self.root.after(10, self.sync_widget_colors)
 
     def create_layer_item(self, layer, index):
-        t = THEMES[self.current_theme]
+        g = GLASS[self.current_theme]
         selected = (self.selected_layer == layer)
-        bg_col = t["layer_sel"] if selected else t["layer_bg"]
-        fg_col = "black" if self.current_theme == "Aqua" else "white"
-        fg_col = t.get("layer_fg", fg_col)
-        if selected:
-            fg_col = t.get("layer_sel_fg", fg_col)
+        bg_col = g["list_sel"] if selected else g["list_bg"]
+        fg_col = g["list_sel_fg"] if selected else g["list_fg"]
         
-        frame = tk.Frame(self.layers_frame, bg=bg_col, relief=tk.RAISED, bd=1)
+        frame = tk.Frame(self.layers_frame, bg=bg_col, bd=0)
         frame.pack(fill=tk.X, pady=2, padx=5)
         frame.is_layer_item = True
         frame.bind('<Button-1>', lambda e, l=layer: self.select_layer(l))
@@ -449,6 +571,7 @@ class OrbCreator:
         elif layer.type == 'glow':
             self.var_glow_opacity.set(layer.glow_opacity)
             
+        self._show_layer_props(layer)
         self.update_layers_panel()
         self.render_canvas()
 
@@ -530,7 +653,7 @@ class OrbCreator:
         self.canvas.delete('render')
         self.canvas.delete('bbox')
         
-        comp = self.render_composition(self.canvas_size)
+        comp = self.render_composition(self.view_px)
         self.preview_photo = ImageTk.PhotoImage(comp)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.preview_photo, tags='render')
         
@@ -552,7 +675,8 @@ class OrbCreator:
     def draw_bounding_box(self, layer):
         bounds = self.get_layer_bounds(layer)
         if not bounds: return
-        x1, y1, x2, y2 = bounds
+        s = self.view_scale
+        x1, y1, x2, y2 = bounds[0] * s, bounds[1] * s, bounds[2] * s, bounds[3] * s
         
         self.canvas.create_rectangle(x1, y1, x2, y2, outline='cyan', width=1, dash=(4, 4), tags='bbox')
         
@@ -565,6 +689,11 @@ class OrbCreator:
         for hx, hy, htype in corners:
             h = self.canvas.create_rectangle(hx-4, hy-4, hx+4, hy+4, fill='cyan', outline='white', tags='bbox')
             self.scale_handles.append((h, htype))
+
+    def _design_coords(self, event):
+        # canvas pixel position translated into the 500 unit design space
+        s = self.view_scale or 1.0
+        return event.x / s, event.y / s
 
     def on_canvas_click(self, event):
         if not self.selected_layer: return
@@ -579,22 +708,25 @@ class OrbCreator:
                 self.initial_scale = self.selected_layer.scale
                 self.initial_scale_x = self.selected_layer.scale_x
                 self.initial_scale_y = self.selected_layer.scale_y
-                self.scale_start_dist = math.hypot(event.x - self.selected_layer.x, event.y - self.selected_layer.y)
-                self.scale_start_x = event.x
-                self.scale_start_y = event.y
+                ex, ey = self._design_coords(event)
+                self.scale_start_dist = math.hypot(ex - self.selected_layer.x, ey - self.selected_layer.y)
+                self.scale_start_x = ex
+                self.scale_start_y = ey
                 return
                 
+        ex, ey = self._design_coords(event)
         bounds = self.get_layer_bounds(self.selected_layer)
-        if bounds and (bounds[0] <= event.x <= bounds[2]) and (bounds[1] <= event.y <= bounds[3]):
+        if bounds and (bounds[0] <= ex <= bounds[2]) and (bounds[1] <= ey <= bounds[3]):
             self.dragging = True
-            self.drag_offset_x = event.x - self.selected_layer.x
-            self.drag_offset_y = event.y - self.selected_layer.y
+            self.drag_offset_x = ex - self.selected_layer.x
+            self.drag_offset_y = ey - self.selected_layer.y
 
     def on_canvas_drag(self, event):
         if not self.selected_layer: return
+        ex, ey = self._design_coords(event)
         
         if self.scaling:
-            dist = math.hypot(event.x - self.selected_layer.x, event.y - self.selected_layer.y)
+            dist = math.hypot(ex - self.selected_layer.x, ey - self.selected_layer.y)
             if self.scale_start_dist > 0:
                 factor = dist / self.scale_start_dist
                 if self.selected_layer.type == 'reflection':
@@ -604,15 +736,15 @@ class OrbCreator:
                     self.selected_layer.scale = max(0.1, self.initial_scale * factor)
         
         elif self.scaling_x and self.scale_start_x != self.selected_layer.x:
-            factor = abs(event.x - self.selected_layer.x) / abs(self.scale_start_x - self.selected_layer.x)
+            factor = abs(ex - self.selected_layer.x) / abs(self.scale_start_x - self.selected_layer.x)
             self.selected_layer.scale_x = max(0.1, self.initial_scale_x * factor)
             
         elif self.scaling_y and self.scale_start_y != self.selected_layer.y:
-            factor = abs(event.y - self.selected_layer.y) / abs(self.scale_start_y - self.selected_layer.y)
+            factor = abs(ey - self.selected_layer.y) / abs(self.scale_start_y - self.selected_layer.y)
             self.selected_layer.scale_y = max(0.1, self.initial_scale_y * factor)
             
         elif self.dragging:
-            nx, ny = event.x - self.drag_offset_x, event.y - self.drag_offset_y
+            nx, ny = ex - self.drag_offset_x, ey - self.drag_offset_y
             center = self.canvas_size // 2
             
             if abs(nx - center) < self.snap_threshold:

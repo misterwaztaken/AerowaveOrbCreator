@@ -19,7 +19,7 @@ def glass_panel(base, box, radius, st, shadow=True, ss=3):
     out = base.copy()
 
     if shadow:
-        m = 60
+        m = 16
         sx0, sy0, sx1, sy1 = max(0, x0 - m), max(0, y0 - m), min(W, x1 + m), min(H, y1 + m)
         reg = out.crop((sx0, sy0, sx1, sy1))
         sm = Image.new("L", reg.size, 0)
@@ -396,6 +396,99 @@ class GradientPanel(tk.Canvas):
         self.delete("grad")
         self.create_image(0, 0, anchor=tk.NW, image=self.grad_img, tags="grad")
         self.tag_lower("grad")
+
+class GlassCard(tk.Canvas):
+    # persistent frosted glass region: composites glass_panel over a copy of the
+    # window gradient at this card's position, regular widgets pack on top
+    def __init__(self, parent, radius=18, **kwargs):
+        super().__init__(parent, highlightthickness=0, bd=0, **kwargs)
+        self.radius = radius
+        self.ui_top = "#2b2b2b"
+        self.ui_bot = "#2b2b2b"
+        self.glass = None
+        self.flat_bg = "#2b2b2b"
+        self.row_colors = []                        # vertical colour profile of the drawn glass
+        self.photo = None
+        self._job = None
+        self._last = None                         # geometry + theme key of the last drawn frame
+        self.on_flat_bg = None                     # callback(flat_bg) fired after every redraw
+        self.bind("<Configure>", self._on_configure)
+
+    def set_theme(self, t, st):
+        # t: THEMES entry carrying the window gradient, st: GLASS entry for the frost
+        self.ui_top = t["ui_top"]
+        self.ui_bot = t["ui_bot"]
+        self.glass = st
+        self._redraw()
+
+    def refresh(self):
+        self._redraw()
+
+    def color_at(self, frac):
+        # glass colour at a vertical position of this card (0 top, 1 bottom)
+        if not self.row_colors:
+            return self.flat_bg
+        i = int(min(0.999, max(0.0, frac)) * len(self.row_colors))
+        return "#%02x%02x%02x" % self.row_colors[i]
+
+    def _on_configure(self, e):
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except Exception:
+                pass
+        self._job = self.after(30, self._redraw)   # debounce resize bursts to a single redraw
+
+    def _window_row(self):
+        # this card's top row inside the toplevel window plus the window height
+        try:
+            root = self.winfo_toplevel()
+            return max(0, self.winfo_rooty() - root.winfo_rooty()), max(1, root.winfo_height())
+        except tk.TclError:
+            return 0, max(1, self.winfo_height())
+
+    def _redraw(self):
+        self._job = None
+        w, h = self.winfo_width(), self.winfo_height()
+        m = 14                                     # margin around the glass that carries the drop shadow
+        if self.glass is None or w < 2 * m + 4 or h < 2 * m + 4:
+            return
+        ry, rh = self._window_row()
+        key = (w, h, ry, rh, self.ui_top, self.ui_bot, id(self.glass))
+        if key == self._last:
+            return                                 # same size, position and theme: keep the last frame
+        self._last = key
+        c1 = [int(self.ui_top[i:i + 2], 16) for i in (1, 3, 5)]
+        c2 = [int(self.ui_bot[i:i + 2], 16) for i in (1, 3, 5)]
+        col = Image.new("RGB", (1, h))
+        for y in range(h):                         # window gradient rows covered by this card
+            k = min(1.0, max(0.0, (ry + y) / float(rh))) if rh > 0 else 0.0
+            col.putpixel((0, y), tuple(int(c1[i] + (c2[i] - c1[i]) * k) for i in range(3)))
+        backdrop = col.resize((w, h))
+        panel = glass_panel(backdrop, (m, m, w - m, h - m), self.radius, self.glass)
+        self.photo = ImageTk.PhotoImage(panel)
+        self.delete("glass")
+        self.create_image(0, 0, anchor=tk.NW, image=self.photo, tags="glass")
+        self.tag_lower("glass")
+
+        # vertical colour profile of the composited glass, hosted widgets pick their row
+        nb = 16
+        self.row_colors = []
+        ix0, ix1 = m + 8, w - m - 8
+        band = (h - 2 * m) / float(nb)
+        for i in range(nb):
+            y0 = int(m + i * band)
+            y1 = max(y0 + 1, int(m + (i + 1) * band))
+            if ix1 <= ix0 or y1 > panel.height:
+                break
+            self.row_colors.append(panel.crop((ix0, y0, ix1, y1)).resize((1, 1)).getpixel((0, 0)))
+        if self.row_colors:
+            self.flat_bg = "#%02x%02x%02x" % self.row_colors[len(self.row_colors) // 2]
+        if self.on_flat_bg:
+            try:
+                self.on_flat_bg(self.flat_bg)
+            except Exception:
+                pass
 
 class OrbLayer:
     def __init__(self, name, layer_type, visible=True):
