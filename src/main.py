@@ -1,4 +1,10 @@
+"""
+main.py
 
+The main script I talked about earlier in it's extension script. Links everything together.
+
+(from Aerowave Orb Creator)
+"""
 
 from .common import *
 from .intro import *
